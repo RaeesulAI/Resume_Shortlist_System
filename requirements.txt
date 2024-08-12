@@ -1,0 +1,15 @@
+streamlit
+google-generativeai
+python-dotenv
+langchain
+PyPDF2
+PyMuPDF
+chromadb
+faiss-cpu
+langchain_google_genai
+langchain_community
+docx2txt
+anthropic
+sentence-transformers
+pytesseract 
+pillow
