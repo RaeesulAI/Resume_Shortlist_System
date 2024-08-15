@@ -1,9 +1,11 @@
+import numpy as np
 import docx2txt
 import fitz
 import pytesseract
-import io
-import base64 
+import easyocr
 import pdf2image
+import base64
+import io
 from PIL import Image
 from PyPDF2 import PdfReader
  
@@ -21,7 +23,7 @@ def extract_text(file):
                             
             # If PyPDF2 fails to extract text, try PyMuPDF
             if not text.strip():
-                # print("PyPDF2 failed to extract text. Trying PyMuPDF...")
+                print("PyPDF2 failed to extract text. Trying PyMuPDF...")
                 pdf_document = fitz.open(stream=file.read(), filetype="pdf")
                 for page in pdf_document:
                     page_text = page.get_text()
@@ -31,7 +33,7 @@ def extract_text(file):
             
             # If still no text, try OCR
             if not text.strip():
-                # print("Attempting OCR...")
+                print("Attempting OCR...")
                 pdf_document = fitz.open(stream=file.read(), filetype="pdf")
                 for page in pdf_document:
                     pix = page.get_pixmap()
@@ -62,18 +64,40 @@ def extract_text(file):
     
     return text
 
-# function for setup the pdf file
-def pdf_setup(uploaded_file):
+# function for extract text using ICR
+def extract_text_with_icr(file):
+    # Initialize the OCR reader
+    reader = easyocr.Reader(['en'])  # Use English language model
+    # Open the PDF
+    doc = fitz.open(stream=file.read(), filetype="pdf")
+    full_text = ""
+    
+    # Iterate through each page
+    for page in doc:
+        # Convert the page to an image
+        pix = page.get_pixmap()
+        img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+        # Convert PIL Image to numpy array
+        img_np = np.array(img)
+        # Perform OCR on the image
+        result = reader.readtext(img_np)
+        # Extract the text
+        page_text = " ".join([text[1] for text in result])
+        full_text += page_text
+    
+    return full_text
 
-    if uploaded_file is not None:
-        
+# function for setup the pdf file
+def input_pdf_setup(file):
+
+    if file is not None:
         # Convert the PDF to image
-        images = pdf2image.convert_from_bytes(uploaded_file.read())
+        images = pdf2image.convert_from_bytes(file.read())
         # 1st page of image
         first_page = images[0]
         # Convert to bytes
         img_byte_arr = io.BytesIO()
-        first_page.save(img_byte_arr, format='JPEG')
+        # first_page.save(img_byte_arr, format='JPEG')
         img_byte_arr = img_byte_arr.getvalue()
 
         pdf_parts = [
@@ -86,7 +110,6 @@ def pdf_setup(uploaded_file):
     
     else:
         raise FileNotFoundError("No file uploaded")
-
 
 # function for data ingestion
 def ingest_data(job_description_file, resume_files):
