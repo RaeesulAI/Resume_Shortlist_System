@@ -5,15 +5,18 @@ import re
 import google.generativeai as genai
 import pandas as pd
 from dotenv import load_dotenv
-from DocumentManager import extract_text, pdf_setup
+from DocumentManager import extract_text, extract_text_with_icr
 from EmbeddingManager import split_document, clear_previous_data, create_vector_store
 from RetreivalAgent import match_resumes, calculate_duration, format_duration
+from WeightageDistribution import percentage_to_float, calculate_cv_score
 
 # load the all environment variables from .env files
 load_dotenv()
 
 # configure API keys
 genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
+
+os.environ["KMP_DUPLICATE_LIB_OK"]="TRUE"
 
 # helper function to ensure all values are lists
 def ensure_list(value):
@@ -30,6 +33,27 @@ def ensure_list(value):
 def sanitize_filename(filename):
     # Remove all special characters, keep only English alphabetic letters and numbers
     return re.sub(r'[^a-zA-Z0-9]', '', filename)
+
+# helper function for calculate total duration
+def get_total_duration(result):
+    if result:
+        # Handle the case where there's no work experience
+        if isinstance(result['work_experience_matching']['relevant_job_roles'], str):
+            # Assume it's "No Experience" or similar
+            result['work_experience_matching']['total_duration'] = {"years": 0, "months": 0}
+        else:
+            # Recalculate durations
+            for job in result['work_experience_matching']['relevant_job_roles']:
+                job['duration'] = calculate_duration(job['start_date'], job['end_date'])
+                                
+            # Recalculate total duration
+            total_months = sum(job['duration']['years'] * 12 + job['duration']['months'] 
+                for job in result['work_experience_matching']['relevant_job_roles'])
+            result['work_experience_matching']['total_duration'] = {
+                "years": total_months // 12,
+                "months": total_months % 12
+                }
+    return result
 
 # Streamlit app
 def main():
@@ -54,11 +78,11 @@ def main():
                 # Process Job Description
                 job_text = extract_text(job_description_file)
                 if job_text is None:
-                    st.error(f"Failed to extract text from job description file: {job_description_file.name}")
+                    print(f"Failed to extract text from job description file: {job_description_file.name}")
                     return
                 job_chunks = split_document(job_text)
                 job_store = create_vector_store(job_chunks, "job_store")
-                print("\nSuccessfully completed the JD...\n")
+                print("Successfully completed the JD...\n")
 
                 # Process Resumes
                 results = []
@@ -67,34 +91,14 @@ def main():
                     resume_id = sanitize_filename(resume_id) # remove special characters
                     resume_text = extract_text(resume_file)
                     if resume_text is None:
-                        st.error(f"Failed to extract text from resume file: {resume_file.name}")
+                        print(f"Failed to extract text from resume file: {resume_file.name}")
                         continue
                     else:
                         resume_chunks = split_document(resume_text)
-                        # print(f"Number of resume chunks: {len(resume_chunks)}")
                         resume_store = create_vector_store(resume_chunks, f"resume_stores/{resume_id}")
-
-                        # Match Resume with Job Description
                         match_result = match_resumes(job_store, resume_store, resume_id, job_id)
-                        if match_result:
-                            # Handle the case where there's no work experience
-                            if isinstance(match_result['work_experience_matching']['relevant_job_roles'], str):
-                                # Assume it's "No Experience" or similar
-                                match_result['work_experience_matching']['total_duration'] = {"years": 0, "months": 0}
-                            else:
-                                # Recalculate durations
-                                for job in match_result['work_experience_matching']['relevant_job_roles']:
-                                    job['duration'] = calculate_duration(job['start_date'], job['end_date'])
-                                
-                                # Recalculate total duration
-                                total_months = sum(job['duration']['years'] * 12 + job['duration']['months'] 
-                                                for job in match_result['work_experience_matching']['relevant_job_roles'])
-                                match_result['work_experience_matching']['total_duration'] = {
-                                    "years": total_months // 12,
-                                    "months": total_months % 12
-                                }
-                                
-                            results.append(match_result)
+                        match_result = get_total_duration(match_result)
+                        results.append(match_result)
                     
                     print("Successfully completed: " + resume_id + "\n")
 
@@ -150,6 +154,15 @@ def main():
                 for col in list_columns:
                     df[col] = df[col].apply(lambda x: ', '.join(x) if x else 'Not Mentioned')
                 
+                columns_to_convert = ['skills_match', 'experience_match', 'education_match', 
+                                      'projects_match', 'certifications_percentage', 'overall_match']
+
+                for column in columns_to_convert:
+                    if column in df.columns:
+                        df[column] = df[column].apply(percentage_to_float)
+                
+                df['weighted_cv_score'] = df.apply(calculate_cv_score, axis=1).round(2)
+
                 # Display Results
                 st.subheader(f"Job Description: {job_id}")
                 for result in results:
@@ -168,6 +181,8 @@ def main():
                     file_name="resume_matching_results.csv",
                     mime="text/csv",
                 )
+
+                print("Successfully Completed the Process..")
 
         else:
             st.error("Please upload both a job description and at least one resume.")
