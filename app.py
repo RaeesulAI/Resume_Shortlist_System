@@ -5,10 +5,7 @@ import re
 import google.generativeai as genai
 import pandas as pd
 from dotenv import load_dotenv
-from DocumentManager import extract_text, extract_text_with_icr
-from EmbeddingManager import split_document, clear_previous_data, create_vector_store
-from RetreivalAgent import match_resumes, calculate_duration, format_duration
-from WeightageDistribution import percentage_to_float, calculate_cv_score
+from Resume_shortlist_system import ResumeShortlistSystem
 
 # load the all environment variables from .env files
 load_dotenv()
@@ -17,6 +14,9 @@ load_dotenv()
 genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
 
 os.environ["KMP_DUPLICATE_LIB_OK"]="TRUE"
+
+# Initialize the Knowledge-Based Search Retrieval System
+RS_system = ResumeShortlistSystem()
 
 # helper function to ensure all values are lists
 def ensure_list(value):
@@ -44,7 +44,7 @@ def get_total_duration(result):
         else:
             # Recalculate durations
             for job in result['work_experience_matching']['relevant_job_roles']:
-                job['duration'] = calculate_duration(job['start_date'], job['end_date'])
+                job['duration'] = RS_system.calculate_duration(job['start_date'], job['end_date'])
                                 
             # Recalculate total duration
             total_months = sum(job['duration']['years'] * 12 + job['duration']['months'] 
@@ -70,18 +70,13 @@ def main():
             with st.spinner("Processing..."):
 
                 # Clear previous data
-                clear_previous_data()
+                RS_system.clear_previous_data
 
                 # Generate unique ID for job description
                 job_id = os.path.splitext(job_description_file.name)[0]
 
                 # Process Job Description
-                job_text = extract_text(job_description_file)
-                if job_text is None:
-                    print(f"Failed to extract text from job description file: {job_description_file.name}")
-                    return
-                job_chunks = split_document(job_text)
-                job_store = create_vector_store(job_chunks, "job_store")
+                job_store = RS_system.load_document(job_description_file, "job_store")
                 print("Successfully completed the JD...\n")
 
                 # Process Resumes
@@ -89,16 +84,11 @@ def main():
                 for resume_file in resume_files:
                     resume_id = os.path.splitext(resume_file.name)[0]
                     resume_id = sanitize_filename(resume_id) # remove special characters
-                    resume_text = extract_text(resume_file)
-                    if resume_text is None:
-                        print(f"Failed to extract text from resume file: {resume_file.name}")
-                        continue
-                    else:
-                        resume_chunks = split_document(resume_text)
-                        resume_store = create_vector_store(resume_chunks, f"resume_stores/{resume_id}")
-                        match_result = match_resumes(job_store, resume_store, resume_id, job_id)
-                        match_result = get_total_duration(match_result)
-                        results.append(match_result)
+                    print(resume_id, " Process Started.......")
+                    resume_store = RS_system.load_document(resume_file, f"resume_stores/{resume_id}")
+                    match_result = RS_system.match_resumes(job_store, resume_store, resume_id, job_id)
+                    match_result = get_total_duration(match_result)
+                    results.append(match_result)
                     
                     print("Successfully completed: " + resume_id + "\n")
 
@@ -118,7 +108,7 @@ def main():
                         'skills_analysis': r['skills_matching']['skills_analysis'],
 
                         'relevant_job_roles': ensure_list(r['work_experience_matching']['job_roles']),
-                        'total_duration': format_duration(r['work_experience_matching']['total_duration']),
+                        'total_duration': RS_system.format_duration(r['work_experience_matching']['total_duration']),
                         'key_responsibilities': ensure_list(r['work_experience_matching']['key_responsibilities']),
                         'experience_match': r['work_experience_matching']['experience_percentage'],
                         'experience_analysis': r['work_experience_matching']['experience_analysis'],
@@ -147,9 +137,9 @@ def main():
                 df = df.replace({None: pd.NA})
                 
                 # Convert list columns to string representations
-                list_columns = ['technical_skills', 'soft_skills', 'relevant_job_roles', 'key_responsibilities', 
-                                'relevant_projects', 'education', 'achievements', 'extra_activities', 
-                                'certifications']
+                list_columns = ['technical_skills', 'soft_skills', 'relevant_job_roles', 
+                                'key_responsibilities', 'relevant_projects', 'education', 
+                                'achievements', 'extra_activities', 'certifications']
 
                 for col in list_columns:
                     df[col] = df[col].apply(lambda x: ', '.join(x) if x else 'Not Mentioned')
@@ -159,9 +149,9 @@ def main():
 
                 for column in columns_to_convert:
                     if column in df.columns:
-                        df[column] = df[column].apply(percentage_to_float)
+                        df[column] = df[column].apply(RS_system.percentage_to_float)
                 
-                df['weighted_cv_score'] = df.apply(calculate_cv_score, axis=1).round(2)
+                df['weighted_cv_score'] = df.apply(RS_system.calculate_cv_score, axis=1).round(2)
 
                 # Display Results
                 st.subheader(f"Job Description: {job_id}")
