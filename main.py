@@ -16,27 +16,18 @@ app = FastAPI(title="Resume Shortlisting System")
 
 RS_system = ResumeShortlistSystem()
 
-class CustomWeightage(BaseModel):
-    skills: float
-    work_experience: float
-    projects: float
-    education: float
-    certifications: float
-
-async def save_upload_file(upload_file: UploadFile, destination: str):
-    try:
-        with open(destination, "wb") as buffer:
-            content = await upload_file.read()
-            buffer.write(content)
-    finally:
-        await upload_file.close()
-
+# FastAPI endpoint for processing resumes and job descriptions
 @app.post("/process_resumes/")
 async def process_resumes(
     job_description: UploadFile = File(...),
     resumes: List[UploadFile] = File(...),
     weightage: Optional[str] = Form("Default"),
-    custom_weightage: Optional[str] = Form(None)
+    # custom_weightage: Optional[str] = Form(None)
+    skills: Optional[float] = None,
+    experience: Optional[float] = None,
+    projects: Optional[float] = None,
+    education: Optional[float] = None,
+    certification: Optional[float] = None
 ):
     try:
         logger.info("Starting resume processing")
@@ -44,19 +35,13 @@ async def process_resumes(
 
         job_id = os.path.splitext(job_description.filename)[0]
         logger.info(f"job description: {job_id}")
-        # job_file_path = f"temp_{job_description.filename}"
-        # logger.info(f"job description path: {job_file_path}")
-        # await save_upload_file(job_description, job_file_path)
         job_store = RS_system.load_document(job_description, "job_store")
-        # os.remove(job_file_path)
         logger.info(f"Processed job description: {job_id}")
 
         results = []
         for resume in resumes:
             resume_id = os.path.splitext(resume.filename)[0]
             resume_id = RS_system.sanitize_filename(resume_id)
-            # resume_file_path = f"temp_{resume_id}"
-            # await save_upload_file(resume, resume_file_path)
             resume_store = RS_system.load_document(resume, f"resume_stores/{resume_id}")
             match_result = RS_system.match_resumes(job_store, resume_store, resume_id, job_id)
             if match_result is None:
@@ -64,24 +49,25 @@ async def process_resumes(
                 continue
             match_result = RS_system.get_total_duration(match_result)
             results.append(match_result)
-            # os.remove(resume_file_path)
             logger.info(f"Processed resume: {resume_id}")
 
         if not results:
             raise HTTPException(status_code=400, detail="No valid results were generated from the resumes")
 
         custom_weights = None
-        if weightage == "Custom" and custom_weightage:
-            try:
-                custom_weights = json.loads(custom_weightage)
-                custom_weights = CustomWeightage(**custom_weights)
-                is_valid, error_message = RS_system.validate_weights(custom_weights.dict())
-                if not is_valid:
-                    raise HTTPException(status_code=400, detail=error_message)
-            except json.JSONDecodeError:
-                raise HTTPException(status_code=400, detail="Invalid JSON for custom_weightage")
-            except ValueError as e:
-                raise HTTPException(status_code=400, detail=str(e))
+        if weightage == "Custom":
+            if None in [skills, experience, projects, education, certification]:
+                raise HTTPException(status_code=400, detail="All custom weights must be provided.")
+            custom_weightage = {
+                "skills": skills,
+                "work_experience": experience,
+                "projects": projects,
+                "education": education,
+                "certifications": certification
+            }
+            is_valid, error_message = RS_system.validate_weights(custom_weightage)
+            if not is_valid:
+                raise HTTPException(status_code=400, detail=error_message)
 
         logger.info("Generating final DataFrame")
         df = RS_system.final_df(results, custom_weights=custom_weights.dict() if custom_weights else None)
@@ -89,7 +75,8 @@ async def process_resumes(
         response_data = {
             "job_id": job_id,
             "results": results,
-            "summary": df.to_dict(orient="records")
+            "summary": df.to_dict(orient="records"),
+            "csv_data": df.to_csv(index=False)
         }
 
         logger.info("Processing completed successfully")

@@ -35,72 +35,21 @@ class ResumeShortlistSystem:
         # if 'resume_ids' in st.session_state:
         #     del st.session_state['resume_ids']
 
-    '''
-    # Function for load the resume into vector DB FastAPI
-    def load_document(self, file_path, store_name):
-        text = ""
-
-        if file_path.endswith('.pdf'):
-            try:
-                loader = PyPDFLoader(file_path)
-                pages = loader.load()
-                for page in pages:
-                    text += page.page_content
-                print(len(text))
-                # extract text from Image
-                if not text.strip():
-                    loader = PyPDFLoader(file_path, extract_images=True)
-                    pages = loader.load()
-                    for page in pages:
-                        text += page.page_content
-
-            except Exception as e:
-                print(f"Error extracting PDF text: {str(e)}")
-        
-        elif file_path.endswith('.docx'):
-            try:
-                text = docx2txt.process(file_path)
-                
-            except Exception as e:
-                print(f"Error extracting DOCX text: {str(e)}")
-        
-        else:
-            try:
-                with open(file_path, 'r', encoding='utf-8') as file:
-                    text = file.read()
-                
-            except Exception as e:
-                print(f"Error reading text file: {str(e)}")
-
-        chunks = self.text_splitter.split_text(text)
-        vector_store = FAISS.from_texts(chunks, self.embeddings)
-        vector_store.save_local(store_name)
-
-        return vector_store
-    '''
-
-    # '''
     # Function for load the resume into vector DB
     def load_document(self, file, store_name):
         text = ""
-        print(file)
+        
         if file.filename.endswith('.pdf'):
-            print(file)
             try:
-                print("hello")
                 # Save the uploaded file to a temporary location
                 with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as temp_file:
-                    temp_file.write(file.read())
+                    temp_file.write(file.file.read())
                     temp_file_path = temp_file.name
                 
-                print("hello2")
-
                 loader = PyPDFLoader(temp_file_path)
                 pages = loader.load()
                 for page in pages:
                     text += page.page_content
-
-                print(text)
 
                 # extract text from Image
                 if not text.strip():
@@ -112,7 +61,6 @@ class ResumeShortlistSystem:
                 os.remove(temp_file_path)
 
             except Exception as e:
-                print("hello3")
                 print(f"Error extracting PDF text: {str(e)}")
         
         elif file.filename.endswith('.docx'):
@@ -130,13 +78,10 @@ class ResumeShortlistSystem:
                 print(f"Error reading text file: {str(e)}")
         
         chunks = self.text_splitter.split_text(text)
-        print(text)
         vector_store = FAISS.from_texts(chunks, self.embeddings)
-        print(text)
         vector_store.save_local(store_name)
 
         return vector_store
-    # '''
 
     # function for Resume Matching and Result Generation
     def match_resumes(self, job_description_store, resume_store, resume_id, jd_id):
