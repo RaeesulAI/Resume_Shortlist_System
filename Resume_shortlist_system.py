@@ -1,8 +1,10 @@
 import os
+import re
 import docx2txt
 import tempfile
 import json
 import shutil
+import pandas as pd
 import streamlit as st
 from langchain_community.document_loaders import PyPDFLoader 
 from langchain.text_splitter import RecursiveCharacterTextSplitter
@@ -28,26 +30,77 @@ class ResumeShortlistSystem:
             shutil.rmtree("job_store")
         if os.path.exists("resume_stores"):
             shutil.rmtree("resume_stores")
-        if 'job_id' in st.session_state:
-            del st.session_state['job_id']
-        if 'resume_ids' in st.session_state:
-            del st.session_state['resume_ids']
+        # if 'job_id' in st.session_state:
+        #     del st.session_state['job_id']
+        # if 'resume_ids' in st.session_state:
+        #     del st.session_state['resume_ids']
 
+    '''
+    # Function for load the resume into vector DB FastAPI
+    def load_document(self, file_path, store_name):
+        text = ""
+
+        if file_path.endswith('.pdf'):
+            try:
+                loader = PyPDFLoader(file_path)
+                pages = loader.load()
+                for page in pages:
+                    text += page.page_content
+                print(len(text))
+                # extract text from Image
+                if not text.strip():
+                    loader = PyPDFLoader(file_path, extract_images=True)
+                    pages = loader.load()
+                    for page in pages:
+                        text += page.page_content
+
+            except Exception as e:
+                print(f"Error extracting PDF text: {str(e)}")
+        
+        elif file_path.endswith('.docx'):
+            try:
+                text = docx2txt.process(file_path)
+                
+            except Exception as e:
+                print(f"Error extracting DOCX text: {str(e)}")
+        
+        else:
+            try:
+                with open(file_path, 'r', encoding='utf-8') as file:
+                    text = file.read()
+                
+            except Exception as e:
+                print(f"Error reading text file: {str(e)}")
+
+        chunks = self.text_splitter.split_text(text)
+        vector_store = FAISS.from_texts(chunks, self.embeddings)
+        vector_store.save_local(store_name)
+
+        return vector_store
+    '''
+
+    # '''
     # Function for load the resume into vector DB
     def load_document(self, file, store_name):
         text = ""
-
-        if file.name.endswith('.pdf'):
+        print(file)
+        if file.filename.endswith('.pdf'):
+            print(file)
             try:
+                print("hello")
                 # Save the uploaded file to a temporary location
                 with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as temp_file:
                     temp_file.write(file.read())
                     temp_file_path = temp_file.name
+                
+                print("hello2")
 
                 loader = PyPDFLoader(temp_file_path)
                 pages = loader.load()
                 for page in pages:
                     text += page.page_content
+
+                print(text)
 
                 # extract text from Image
                 if not text.strip():
@@ -59,9 +112,10 @@ class ResumeShortlistSystem:
                 os.remove(temp_file_path)
 
             except Exception as e:
+                print("hello3")
                 print(f"Error extracting PDF text: {str(e)}")
         
-        elif file.name.endswith('.docx'):
+        elif file.filename.endswith('.docx'):
             try:
                 self.text = docx2txt.process(file)
                 
@@ -76,10 +130,13 @@ class ResumeShortlistSystem:
                 print(f"Error reading text file: {str(e)}")
         
         chunks = self.text_splitter.split_text(text)
+        print(text)
         vector_store = FAISS.from_texts(chunks, self.embeddings)
+        print(text)
         vector_store.save_local(store_name)
 
         return vector_store
+    # '''
 
     # function for Resume Matching and Result Generation
     def match_resumes(self, job_description_store, resume_store, resume_id, jd_id):
@@ -283,7 +340,10 @@ class ResumeShortlistSystem:
             return 0.0  # Return 0.0 if conversion fails
     
     # Function for assigning the weights for job positions
-    def assign_weights(self, job_position):
+    def assign_weights(self, job_position, custom_weights=None):
+        if custom_weights:
+            return custom_weights
+        
         # Senior Level Roles
         if any(keyword in job_position.lower() for keyword in ['senior', 'lead']):
             return {'skills': 0.3, 'work_experience': 0.35, 'education': 0.1, 
@@ -318,9 +378,10 @@ class ResumeShortlistSystem:
                     'projects': 0.25, 'certifications': 0.0}
 
     # Function for calculate weightage score for every CV
-    def calculate_cv_score(self, row):
+    def calculate_cv_score(self, row, custom_weights=None):
+
         job_position = row['job_position']
-        weights = self.assign_weights(job_position)
+        weights = self.assign_weights(job_position, custom_weights)
 
         score = (
             weights['skills'] * row['skills_match'] +
@@ -331,3 +392,115 @@ class ResumeShortlistSystem:
         )
         
         return score
+    
+    # helper function for calculate total duration
+    def get_total_duration(self, result):
+        if result:
+            # Handle the case where there's no work experience
+            if isinstance(result['work_experience_matching']['relevant_job_roles'], str):
+                # Assume it's "No Experience" or similar
+                result['work_experience_matching']['total_duration'] = {"years": 0, "months": 0}
+            else:
+                # Recalculate durations
+                for job in result['work_experience_matching']['relevant_job_roles']:
+                    job['duration'] = self.calculate_duration(job['start_date'], job['end_date'])
+                                    
+                # Recalculate total duration
+                total_months = sum(job['duration']['years'] * 12 + job['duration']['months'] 
+                    for job in result['work_experience_matching']['relevant_job_roles'])
+                result['work_experience_matching']['total_duration'] = {
+                    "years": total_months // 12,
+                    "months": total_months % 12
+                    }
+        
+        return result
+
+    # helper function to ensure all values are lists
+    def ensure_list(self, value):
+        if isinstance(value, list):
+            return value
+        elif isinstance(value, str):
+            return [value]
+        elif pd.isna(value) or value is None:
+            return []
+        else:
+            return [str(value)]
+
+    # function remove special characters
+    def sanitize_filename(self, filename):
+        # Remove all special characters, keep only English alphabetic letters and numbers
+        return re.sub(r'[^a-zA-Z0-9]', '', filename)
+    
+    # function for create dataframe
+    def final_df(self, results, custom_weights=None):
+        
+        # create dataframe
+        df = pd.DataFrame([{
+            'job_id': r['job_id'],
+            'job_position': r['job_position'],
+            'resume_id': r['resume_id'],
+            'name': r['personal_info']['name'],
+            'email': r['personal_info']['email'],
+            'contact_number': self.ensure_list(r['personal_info']['contact_number']),
+                        
+            'technical_skills': self.ensure_list(r['skills_matching']['technical_skills']),
+            'soft_skills': self.ensure_list(r['skills_matching']['soft_skills']),
+            'skills_match': r['skills_matching']['skills_percentage'],
+            'skills_analysis': r['skills_matching']['skills_analysis'],
+
+            'relevant_job_roles': self.ensure_list(r['work_experience_matching']['job_roles']),
+            'total_duration': self.format_duration(r['work_experience_matching']['total_duration']),
+            'key_responsibilities': self.ensure_list(r['work_experience_matching']['key_responsibilities']),
+            'experience_match': r['work_experience_matching']['experience_percentage'],
+            'experience_analysis': r['work_experience_matching']['experience_analysis'],
+
+            'relevant_projects': self.ensure_list(r['projects_matching']['relevant_projects']),
+            'technologies_and_outcomes': r['projects_matching']['technologies_and_outcomes'],
+            'projects_match': r['projects_matching']['projects_percentage'],
+            'projects_analysis': r['projects_matching']['projects_analysis'],
+
+            'education': self.ensure_list(r['education_matching']['education']),
+            'achievements': self.ensure_list(r['education_matching']['achievements']),
+            'extra_activities': self.ensure_list(r['education_matching']['extra_activities']),
+            'education_match': r['education_matching']['education_percentage'],
+            'education_analysis': r['education_matching']['education_analysis'],
+
+            'certifications': self.ensure_list(r['professional_certifications_matching']['certifications']),
+            'certifications_percentage': r['professional_certifications_matching']['certifications_percentage'],
+            'certifications_analysis': r['professional_certifications_matching']['certifications_analysis'],
+
+            'overall_match': r['final_matching']['final_overall_percentage'],
+            'overall_analysis': r['final_matching']['final_analysis']
+            } for r in results
+        ])
+
+        # Replace None with NaN for better DataFrame handling
+        df = df.replace({None: pd.NA})
+                
+        # Convert list columns to string representations
+        list_columns = ['technical_skills', 'soft_skills', 'relevant_job_roles', 
+                        'key_responsibilities', 'relevant_projects', 'education', 
+                        'achievements', 'extra_activities', 'certifications']
+
+        for col in list_columns:
+            df[col] = df[col].apply(lambda x: ', '.join(x) if x else 'Not Mentioned')
+                
+        columns_to_convert = ['skills_match', 'experience_match', 'education_match',
+                              'projects_match', 'certifications_percentage', 'overall_match']
+
+        for column in columns_to_convert:
+            if column in df.columns:
+                df[column] = df[column].apply(self.percentage_to_float)
+        
+        df['weighted_cv_score'] = df.apply(self.calculate_cv_score, axis=1, 
+                                           custom_weights = custom_weights).round(2)
+
+        return df
+    
+    # Function to validate weights
+    def validate_weights(self, weights):
+        total_weight = sum(weights.values())
+        if total_weight != 1.0:
+            return False, f"Total weight must equal 1.0. Current total: {total_weight}"
+        return True, ""
+    
