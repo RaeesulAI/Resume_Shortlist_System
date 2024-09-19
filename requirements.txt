@@ -9,6 +9,8 @@ chromadb
 faiss-cpu
 langchain_google_genai
 langchain_community
+langchain_astradb
+cassio
 docx2txt
 anthropic
 sentence-transformers

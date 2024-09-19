@@ -1,11 +1,9 @@
+import os
+import logging
+import uvicorn
 from fastapi import FastAPI, File, UploadFile, Form, HTTPException
 from fastapi.responses import JSONResponse
 from typing import List, Optional
-import os
-import pandas as pd
-from pydantic import BaseModel
-import json
-import logging
 from Resume_shortlist_system import ResumeShortlistSystem
 
 # Set up logging
@@ -22,7 +20,6 @@ async def process_resumes(
     job_description: UploadFile = File(...),
     resumes: List[UploadFile] = File(...),
     weightage: Optional[str] = Form("Default"),
-    # custom_weightage: Optional[str] = Form(None)
     skills: Optional[float] = None,
     experience: Optional[float] = None,
     projects: Optional[float] = None,
@@ -31,11 +28,11 @@ async def process_resumes(
 ):
     try:
         logger.info("Starting resume processing")
-        RS_system.clear_previous_data
+        # RS_system.clear_previous_data
 
         job_id = os.path.splitext(job_description.filename)[0]
         logger.info(f"job description: {job_id}")
-        job_store = RS_system.load_document(job_description, "job_store")
+        job_store = RS_system.load_document(job_description, f"job_store/{job_id}")
         logger.info(f"Processed job description: {job_id}")
 
         results = []
@@ -87,5 +84,4 @@ async def process_resumes(
         raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":
-    import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
