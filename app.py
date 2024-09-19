@@ -1,11 +1,10 @@
 # import neccessary libraries 
 import streamlit as st
 import os
-import re
 import google.generativeai as genai
 import pandas as pd
 from dotenv import load_dotenv
-from Resume_shortlist_system import ResumeShortlistSystem
+from testing import ResumeShortlistSystem
 
 # load the all environment variables from .env files
 load_dotenv()
@@ -13,47 +12,10 @@ load_dotenv()
 # configure API keys
 genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
 
-os.environ["KMP_DUPLICATE_LIB_OK"]="TRUE"
+os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 
 # Initialize the Knowledge-Based Search Retrieval System
 RS_system = ResumeShortlistSystem()
-
-# helper function to ensure all values are lists
-def ensure_list(value):
-    if isinstance(value, list):
-        return value
-    elif isinstance(value, str):
-        return [value]
-    elif pd.isna(value) or value is None:
-        return []
-    else:
-        return [str(value)]
-    
-# function remove special characters
-def sanitize_filename(filename):
-    # Remove all special characters, keep only English alphabetic letters and numbers
-    return re.sub(r'[^a-zA-Z0-9]', '', filename)
-
-# helper function for calculate total duration
-def get_total_duration(result):
-    if result:
-        # Handle the case where there's no work experience
-        if isinstance(result['work_experience_matching']['relevant_job_roles'], str):
-            # Assume it's "No Experience" or similar
-            result['work_experience_matching']['total_duration'] = {"years": 0, "months": 0}
-        else:
-            # Recalculate durations
-            for job in result['work_experience_matching']['relevant_job_roles']:
-                job['duration'] = RS_system.calculate_duration(job['start_date'], job['end_date'])
-                                
-            # Recalculate total duration
-            total_months = sum(job['duration']['years'] * 12 + job['duration']['months'] 
-                for job in result['work_experience_matching']['relevant_job_roles'])
-            result['work_experience_matching']['total_duration'] = {
-                "years": total_months // 12,
-                "months": total_months % 12
-                }
-    return result
 
 # Streamlit app
 def main():
@@ -64,94 +26,91 @@ def main():
     job_description_file = st.file_uploader("Upload Job Description", type=['pdf', 'docx', 'txt'])
     resume_files = st.file_uploader("Upload Resumes", type=['pdf', 'docx', 'txt'], 
                                     accept_multiple_files=True)
+    
+    weightage = st.selectbox(
+        "How woul you like to give weightage?",
+        ("Default", "Custom"),
+        index=None,
+        placeholder="Select Weightage Method.."
+    )
+
+    custom_weightage = None
+
+    if weightage == "Custom":
+        
+        st.write("Enter the Weightage value between 0 to 1")
+
+        col1, col2, col3, col4, col5 = st.columns(5)
+
+        with col1:
+            skills = st.number_input(
+                "Skills", value=None, placeholder="Type between 0 to 1...", 
+                max_value=1.0, min_value=0.0, format="%.2f"
+                )
+        
+        with col2:
+            experience = st.number_input(
+                "Experience", value=None, placeholder="Type between 0 to 1...", 
+                max_value=1.0, min_value=0.0, format="%.2f"
+                )
+        with col3:
+            projects = st.number_input(
+                "Projects", value=None, placeholder="Type between 0 to 1...", 
+                max_value=1.0, min_value=0.0, format="%.2f"
+                )
+        with col4:
+            education = st.number_input(
+                "Education", value=None, placeholder="Type between 0 to 1...", 
+                max_value=1.0, min_value=0.0, format="%.2f"
+                )
+        with col5:
+            certification = st.number_input(
+                "Certfication", value=None, placeholder="Type between 0 to 1...", 
+                max_value=1.0, min_value=0.0, format="%.2f"
+                )
+    
+        custom_weightage = {
+            "skills": skills, 
+            "work_experience": experience, 
+            "projects": projects, 
+            "education": education, 
+            "certifications": certification
+            }
+        
+        # Validate custom weights
+        is_valid, error_message = RS_system.validate_weights(custom_weightage)
+        if not is_valid:
+            st.error(error_message)
+            return
 
     if st.button("Process and Match"):
         if job_description_file is not None and resume_files:
             with st.spinner("Processing..."):
 
                 # Clear previous data
-                RS_system.clear_previous_data
+                # RS_system.clear_previous_data
 
                 # Generate unique ID for job description
                 job_id = os.path.splitext(job_description_file.name)[0]
 
                 # Process Job Description
-                job_store = RS_system.load_document(job_description_file, "job_store")
+                job_store = RS_system.load_document(job_description_file, f"job_store/{job_id}")
                 print("Successfully completed the JD...\n")
 
                 # Process Resumes
                 results = []
                 for resume_file in resume_files:
                     resume_id = os.path.splitext(resume_file.name)[0]
-                    resume_id = sanitize_filename(resume_id) # remove special characters
+                    resume_id = RS_system.sanitize_filename(resume_id) # remove special characters
                     print(resume_id, " Process Started.......")
                     resume_store = RS_system.load_document(resume_file, f"resume_stores/{resume_id}")
                     match_result = RS_system.match_resumes(job_store, resume_store, resume_id, job_id)
-                    match_result = get_total_duration(match_result)
+                    match_result = RS_system.get_total_duration(match_result)
                     results.append(match_result)
                     
                     print("Successfully completed: " + resume_id + "\n")
 
-                # Create DataFrame
-                df = pd.DataFrame([
-                    {
-                        'job_id': r['job_id'],
-                        'job_position': r['job_position'],
-                        'resume_id': r['resume_id'],
-                        'name': r['personal_info']['name'],
-                        'email': r['personal_info']['email'],
-                        'contact_number': ensure_list(r['personal_info']['contact_number']),
-                        
-                        'technical_skills': ensure_list(r['skills_matching']['technical_skills']),
-                        'soft_skills': ensure_list(r['skills_matching']['soft_skills']),
-                        'skills_match': r['skills_matching']['skills_percentage'],
-                        'skills_analysis': r['skills_matching']['skills_analysis'],
-
-                        'relevant_job_roles': ensure_list(r['work_experience_matching']['job_roles']),
-                        'total_duration': RS_system.format_duration(r['work_experience_matching']['total_duration']),
-                        'key_responsibilities': ensure_list(r['work_experience_matching']['key_responsibilities']),
-                        'experience_match': r['work_experience_matching']['experience_percentage'],
-                        'experience_analysis': r['work_experience_matching']['experience_analysis'],
-
-                        'relevant_projects': ensure_list(r['projects_matching']['relevant_projects']),
-                        'technologies_and_outcomes': r['projects_matching']['technologies_and_outcomes'],
-                        'projects_match': r['projects_matching']['projects_percentage'],
-                        'projects_analysis': r['projects_matching']['projects_analysis'],
-
-                        'education': ensure_list(r['education_matching']['education']),
-                        'achievements': ensure_list(r['education_matching']['achievements']),
-                        'extra_activities': ensure_list(r['education_matching']['extra_activities']),
-                        'education_match': r['education_matching']['education_percentage'],
-                        'education_analysis': r['education_matching']['education_analysis'],
-
-                        'certifications': ensure_list(r['professional_certifications_matching']['certifications']),
-                        'certifications_percentage': r['professional_certifications_matching']['certifications_percentage'],
-                        'certifications_analysis': r['professional_certifications_matching']['certifications_analysis'],
-
-                        'overall_match': r['final_matching']['final_overall_percentage'],
-                        'overall_analysis': r['final_matching']['final_analysis']
-                    } for r in results
-                ])
-
-                # Replace None with NaN for better DataFrame handling
-                df = df.replace({None: pd.NA})
-                
-                # Convert list columns to string representations
-                list_columns = ['technical_skills', 'soft_skills', 'relevant_job_roles', 
-                                'key_responsibilities', 'relevant_projects', 'education', 
-                                'achievements', 'extra_activities', 'certifications']
-
-                for col in list_columns:
-                    df[col] = df[col].apply(lambda x: ', '.join(x) if x else 'Not Mentioned')
-                
-                columns_to_convert = ['skills_match', 'experience_match', 'education_match', 
-                                      'projects_match', 'certifications_percentage', 'overall_match']
-
-                for column in columns_to_convert:
-                    if column in df.columns:
-                        df[column] = df[column].apply(RS_system.percentage_to_float)
-                
-                df['weighted_cv_score'] = df.apply(RS_system.calculate_cv_score, axis=1).round(2)
+                df = RS_system.final_df(results, custom_weights=custom_weightage)
 
                 # Display Results
                 st.subheader(f"Job Description: {job_id}")
