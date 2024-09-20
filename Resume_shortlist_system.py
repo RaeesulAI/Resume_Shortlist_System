@@ -5,81 +5,111 @@ import tempfile
 import json
 import shutil
 import pandas as pd
-import streamlit as st
+from uuid import uuid4
 from langchain_community.document_loaders import PyPDFLoader 
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_google_genai import GoogleGenerativeAIEmbeddings, ChatGoogleGenerativeAI
 from langchain_community.vectorstores import FAISS
+from langchain_astradb import AstraDBVectorStore
+from astrapy import DataAPIClient
 from datetime import datetime
 from dateutil.relativedelta import relativedelta
 
 # Set up API keys 
 google_api = os.environ["GOOGLE_API_KEY"]
+ASTRA_DB_API_ENDPOINT = os.getenv("ASTRA_DB_API_ENDPOINT")
+ASTRA_DB_APPLICATION_TOKEN = os.getenv("ASTRA_DB_APPLICATION_TOKEN")
+ASTRA_DB_KEYSPACE = os.getenv("ASTRA_DB_KEYSPACE")
+
+# Initialize the client and get a "Database" object
+client = DataAPIClient(ASTRA_DB_APPLICATION_TOKEN)
+database = client.get_database(ASTRA_DB_API_ENDPOINT)
 
 class ResumeShortlistSystem:
     def __init__(self):
         self.embeddings = GoogleGenerativeAIEmbeddings(model="models/embedding-001")
         self.llm = ChatGoogleGenerativeAI(model="gemini-1.5-flash-001", temperature=0.3)
-        self.text_splitter = RecursiveCharacterTextSplitter(chunk_size=1500, chunk_overlap=750,
+        self.text_splitter = RecursiveCharacterTextSplitter(chunk_size=10000, chunk_overlap=750,
                                                             separators=["\n\n", "\n# ", "\n- ", "\n\t"],
                                                             length_function=len)
     
     # Function to clear previous data
-    def clear_previous_data():
-        if os.path.exists("job_store"):
-            shutil.rmtree("job_store")
-        if os.path.exists("resume_stores"):
-            shutil.rmtree("resume_stores")
-        # if 'job_id' in st.session_state:
-        #     del st.session_state['job_id']
-        # if 'resume_ids' in st.session_state:
-        #     del st.session_state['resume_ids']
+    def clear_collection(self, collection_name):
+        # get the Astra DB collection
+        collection = database.get_collection(collection_name)
+        # delete all the records
+        collection.delete_many({})
+        print("Successfully Deleted the vectors from ", collection_name)
+
+    # generate unique ids
+    def generate_id(self, collection_name):
+
+        # get the Astra DB collection
+        collection = database.get_collection(collection_name)
+        while True:
+            # Generate a random UUID
+            new_id = str(uuid4())
+            # Check if the ID already exists
+            if collection.find_one({"_id": new_id}):
+                print("Generated ID already in the DB. Generate new ID..")
+                continue
+            else:
+                return new_id
 
     # Function for load the resume into vector DB
-    def load_document(self, file, store_name):
-        text = ""
+    def load_document(self, file, collection_name, uid):
         
+        text = ""
+            
         if file.filename.endswith('.pdf'):
             try:
-                # Save the uploaded file to a temporary location
+                    # Save the uploaded file to a temporary location
                 with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as temp_file:
                     temp_file.write(file.file.read())
                     temp_file_path = temp_file.name
-                
+                    
                 loader = PyPDFLoader(temp_file_path)
                 pages = loader.load()
                 for page in pages:
                     text += page.page_content
 
-                # extract text from Image
+                    # extract text from Image
                 if not text.strip():
                     loader = PyPDFLoader(temp_file_path, extract_images=True)
                     pages = loader.load()
                     for page in pages:
                         text += page.page_content
-                
+                    
                 os.remove(temp_file_path)
 
             except Exception as e:
                 print(f"Error extracting PDF text: {str(e)}")
-        
+            
         elif file.filename.endswith('.docx'):
             try:
                 self.text = docx2txt.process(file)
-                
+                    
             except Exception as e:
                 print(f"Error extracting DOCX text: {str(e)}")
-        
+            
         else:
             try:
                 self.text = file.read().decode('utf-8')
-                
+                    
             except Exception as e:
                 print(f"Error reading text file: {str(e)}")
-        
+            
         chunks = self.text_splitter.split_text(text)
-        vector_store = FAISS.from_texts(chunks, self.embeddings)
-        vector_store.save_local(store_name)
+
+        vector_store = AstraDBVectorStore(
+            embedding = self.embeddings,
+            collection_name = collection_name,
+            api_endpoint = ASTRA_DB_API_ENDPOINT,
+            token = ASTRA_DB_APPLICATION_TOKEN,
+            namespace = ASTRA_DB_KEYSPACE
+            )
+        
+        vector_store.add_texts(chunks, ids=[uid])
 
         return vector_store
 

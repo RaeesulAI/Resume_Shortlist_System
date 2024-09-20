@@ -28,18 +28,15 @@ async def process_resumes(
 ):
     try:
         logger.info("Starting resume processing")
-        # RS_system.clear_previous_data
 
-        job_id = os.path.splitext(job_description.filename)[0]
-        logger.info(f"job description: {job_id}")
-        job_store = RS_system.load_document(job_description, f"job_store/{job_id}")
+        job_id = RS_system.generate_id("job_description")
+        job_store = RS_system.load_document(job_description, "job_description", f"{job_id}")
         logger.info(f"Processed job description: {job_id}")
 
         results = []
         for resume in resumes:
-            resume_id = os.path.splitext(resume.filename)[0]
-            resume_id = RS_system.sanitize_filename(resume_id)
-            resume_store = RS_system.load_document(resume, f"resume_stores/{resume_id}")
+            resume_id = RS_system.generate_id("resume")
+            resume_store = RS_system.load_document(resume, "resume", f"{resume_id}")
             match_result = RS_system.match_resumes(job_store, resume_store, resume_id, job_id)
             if match_result is None:
                 logger.warning(f"Failed to process resume: {resume_id}")
@@ -82,6 +79,14 @@ async def process_resumes(
     except Exception as e:
         logger.error(f"An error occurred: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
+
+# FastAPI endpoint for processing resumes and job descriptions
+@app.post("/delete_data/")
+async def delete_data(collection_name: str = Form("resume")):
+
+    # delete data from specific collection
+    RS_system.clear_collection(collection_name)
+    logger.info(f"Successfully Deleted the vectors from {collection_name}")
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)
